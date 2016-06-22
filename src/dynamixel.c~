@@ -343,5 +343,5 @@ void dxl_write_word( int id, int address, int value )
 	dxl_txrx_packet();
 	
 	//清空指令包
-	//memset(gbInstructionPacket, 0, MAXNUM_TXPARAM+10);
+	memset(gbInstructionPacket, 0, MAXNUM_TXPARAM+10);
 }

@@ -1,5 +1,5 @@
-TARGET		= ReadWrite
-OBJS		= ReadWrite.o
+TARGET		= Fourchess
+OBJS		= Fourchess.o
 SRCS		= $(OBJS:.o=.c)
 INCLUDEDIRS	+= -I../../include
 LIBDIRS		+= -L../../lib

@@ -1,12 +1,14 @@
 TARGET		= libdxl.a
-OBJS		= dxl_hal.o dynamixel.o
+OBJS		= dxl_hal.o dynamixel.o beng.o serialCommuni.o
 SRCS		= $(OBJS:.o=.c)
 INCLUDEDIRS	+= -I../include
 LIBDIRS		+= 
 CFLAGS		= $(INCLUDEDIRS) -W -Wall -O2
 
-CC			= gcc
-AR			= ar
+#CC			= gcc
+#AR			= ar
+CC			= arm-linux-gnueabi-gcc
+AR			= arm-linux-gnueabi-ar
 
 $(TARGET): $(OBJS)
 	$(AR) rs $@ $^
