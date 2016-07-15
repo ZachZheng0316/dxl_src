@@ -7,13 +7,14 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include "dynamixel.h"
 #include "beng.h"
 #include "serialCommuni.h"
 
 // Control table address
-#define P_TORQUE_ENABLE	     (24) // 是否激活扭矩
+#define P_TORQUE_ENABLE	     (24) //是否激活扭矩
 #define P_CW_Margin	         (26) //柔性边距
 #define P_Margin             (27) //柔性边距
 #define P_CW_Slope	         (28) //柔性斜率
@@ -40,6 +41,7 @@ int get_servo_word(int id, int address);
 int wait_move_stop(int id);
 int wait_three_move_stop();
 int exact_regulate(int id, int diff); //精确调节
+void send_data(unsigned char *data); //给主机发送数据
 
 int initial_sys(int device, int baudNum); //系统初始化
 int back_default_pos(); 				  //运动到初始位置
@@ -64,16 +66,14 @@ int main()
 	}
 	else{
 		printf("sys init success...\n");
-		//getchar();
 		delay_us(1000000);//延迟1s开始
 	}
-	
+
 	do{
 		if((2 == flag_stop) || (1 == flag_stop)) {
 			back_default_pos();    //运动到初始位置
 			wait_three_move_stop();//等待运动结束
 			get_ball();            //取球
-			
 		}
 		
 		back_center_pos();//回到中间位置
@@ -89,21 +89,24 @@ int main()
 			}
 			else if(flag > 0) {
 				printf("print data ..."); fflush(stdout);
-				packet[flag] = '\0';
+				if(flag >= 19)
+					packet[19] = '\0';
+				else
+					packet[flag] = '\0';
 				printf("the receiving data (%s)\n", packet); fflush(stdout);
 				break;
 			}
 			else {
 			}
 		} 
-		
 		flag_stop = 2; //运动状态变量：0:扔掉球回到初始位置；1：吸球回到初始位置；2：正在进行中;3:重新取串口值
 		
 		//解析字符信息
 		obj_num = analyze_packet(packet, &flag_stop);
 		
-		if((0 == flag_stop) || (2 == flag_stop)) {
-			move_to_channel(obj_num); //运动指定槽道
+		if((0 == flag_stop) || (2 == flag_stop)) { //结束或者是丢球到指定槽道
+			if('p' != packet[2])			
+				move_to_channel(obj_num); //运动指定槽道
 			
 			//发送动作完成信号
 			while(1) {
@@ -112,7 +115,7 @@ int main()
 					printf("failed send data\r"); fflush(stdout);
 				}
 				else{
-					printf("success send data\n"); fflush(stdout);
+					printf("success send data (%s)\n", return_packet); fflush(stdout);
 					break;
 				}
 			}
@@ -226,10 +229,11 @@ int get_servo_word(int id, int address)
 
 int wait_move_stop(int id)
 {
-	int moving, value, read_num = 0;
+	int moving, read_num = 0;
+//	int value;
 	
-	value = get_servo_word(id, P_GOAL_POSITION_L);
-	printf("Fourchess::wait_move_stop:id(%d) objK(%d)\n", id, value);
+//	value = get_servo_word(id, P_GOAL_POSITION_L);
+//	printf("Fourchess::wait_move_stop:id(%d) objK(%d)\n", id, value);
 	
 	do{
 		moving = get_servo_byte(id, P_MOVING);
@@ -239,10 +243,10 @@ int wait_move_stop(int id)
 		}
 		else
 			read_num = 0;
-	}while(read_num <= 10);
+	}while(read_num <= 4);
 	
-	value = get_servo_word(id, P_PRESENT_POSITION_L);
-	printf("Fourchess::wait_move_stop:id(%d) preK(%d)\n",id, value);
+//	value = get_servo_word(id, P_PRESENT_POSITION_L);
+//	printf("Fourchess::wait_move_stop:id(%d) preK(%d)\n",id, value);
 	
 	return 1;
 }
@@ -258,6 +262,7 @@ int wait_three_move_stop()
 }
 
 //精确调节
+//如果一次性到达，返回1；其余的返回2。
 int exact_regulate(int id, int diff)
 {
 	int goal_k, pre_k, k_diff;
@@ -266,10 +271,11 @@ int exact_regulate(int id, int diff)
 	//读取servo的目标刻度和当前刻度
 	goal_k = get_servo_word(id, P_GOAL_POSITION_L);
 	pre_k = get_servo_word(id, P_PRESENT_POSITION_L);
+	printf("first-->exact_reculate:id(%d) goal_k(%d) pre_k(%d)\n", id, goal_k, pre_k);
 	
 	k_diff = goal_k - pre_k;
 	if(abs(k_diff) <= diff) {
-		printf("Fourchess::exact_regulate:-->id(%d) goal_k(%d) pre_k(%d)\n", id, goal_k, pre_k);
+		printf("last-->exact_regulate:id(%d) goal_k(%d) pre_k(%d)\n", id, goal_k, pre_k);
 		return 1;
 	}
 	else{
@@ -278,25 +284,27 @@ int exact_regulate(int id, int diff)
 		do{
 			if(k_diff > 0) {
 				//当前刻度远小于目标刻度
-				goal_temp += 2;
+				goal_temp += 1;
 			}
 			else {
 				//当前刻度远大于目标刻度
-				goal_temp -= 2;
+				goal_temp -= 1;
 			}
 			set_servo_word(id, P_GOAL_POSITION_L, goal_temp); //设置目标刻度
 			delay_us(200000);//等待运动停止
 			wait_move_stop(id);
 		
 			pre_k = get_servo_word(id, P_GOAL_POSITION_L);//读取目标刻度
+			printf("exact_regulate:id(%d) goal_temp(%d) pre_k(%d)\n", id, goal_temp, pre_k);
 		
 			k_diff = goal_k - pre_k;
-		}while(abs(k_diff) >= diff);
+			
+		}while(abs(k_diff) > diff);
 	}
 	
-	printf("Fourchess::exact_regulate:-->id(%d) goal_k(%d) pre_k(%d)\n", id, goal_k, pre_k);
+	printf("last-->exact_regulate:id(%d) goal_k(%d) pre_k(%d)\n", id, goal_k, pre_k);
 	
-	return 1;
+	return 2;
 }
 
 //系统初始化
@@ -367,7 +375,7 @@ int initial_sys(int device, int baudNum)
 //运动到初始位置
 int back_default_pos()
 {
-	set_three_servo_word(P_MOVE_SPEED, 80, 173, 193);//设置运动速度
+	set_three_servo_word(P_MOVE_SPEED, 120, 173, 193);//设置运动速度
 	set_three_servo_word(P_GOAL_POSITION_L, 827, 716, 472);//设置目标位置
 	
 	return 1;
@@ -406,36 +414,69 @@ int move_to_channel(int channelNum)
 int get_ball()
 {
 	//运动到吸管上方
-	set_servo_word(7, P_GOAL_POSITION_L, 829);
+//	printf("move to ball up...\n");
+	set_servo_word(7, P_GOAL_POSITION_L, 827);
 	set_servo_word(9, P_GOAL_POSITION_L, 116);
 	set_servo_word(8, P_GOAL_POSITION_L, 351);
 	wait_move_stop(9);
 	wait_move_stop(8);
-	exact_regulate(7, 1);
+	wait_move_stop(7);
+	//delay_us(500000);
+	//exact_regulate(7, 0);
 	
 	//打开气泵
+//	printf("open beng...\n");
 	open_beng();
 	
+	//设置7 servo的属性
+//	printf("set 7 servo property ...\n");
+	set_servo_word(7, P_Punch, 50);//Punch
+	set_servo_byte(7, P_Slope, 32);//slop
+	set_servo_byte(7, P_CW_Slope, 32);
+	set_servo_word(7, P_TORQUE_VALUE, 1023);//Torque
+	wait_move_stop(7);
+	
+	//发送high信号
+	send_data((unsigned char *)"high");
+	
 	//向下取球
-	set_three_servo_word(P_MOVE_SPEED, 2, 30, 75);
-	set_servo_word(7, P_GOAL_POSITION_L, 829);
-	set_servo_word(9, P_GOAL_POSITION_L, objK[8][2]);
+//	printf("down to get ball...\n");
+	set_three_servo_word(P_MOVE_SPEED, 1, 30, 95);//原30 75
+	set_servo_word(7, P_GOAL_POSITION_L, 825);
+	set_servo_word(9, P_GOAL_POSITION_L, objK[8][2] + 10);
 	set_servo_word(8, P_GOAL_POSITION_L, objK[8][1]);
 	wait_move_stop(7);
-	wait_move_stop(9);
-	wait_move_stop(8);
-	exact_regulate(7, 1);
-	exact_regulate(8, 2);
-	exact_regulate(9, 2);
-	delay_us(200000);
+	//wait_move_stop(9);
+	//wait_move_stop(8);
+
+//	printf("exact_regulate 7 servo ...\n");
+	//exact_regulate(8, 2);
+	//exact_regulate(9, 2);
+	//exact_regulate(7, 0);
+	
+	printf("\n-->move to 827\n\n");
+	set_servo_word(7, P_GOAL_POSITION_L, 827);
+	wait_move_stop(7);
+	exact_regulate(7, 0);
+	
+	printf("\nthe tempreture id(7) tempreture(%d):\n\n", get_servo_byte(7, 43));
+//	getchar();
 	
 	//左右摆动
-	set_servo_word(7, P_GOAL_POSITION_L, 829 + 1);
-	exact_regulate(7, 1);
-	delay_us(200000);
-	set_servo_word(7, P_GOAL_POSITION_L, 829 + 2);
-	exact_regulate(7, 1);
-	delay_us(200000);
+	//set_servo_word(7, P_GOAL_POSITION_L, 826);
+	//wait_move_stop(7);exact_regulate(7, 0);
+	//delay_us(1000000);
+//	getchar();
+	//set_servo_word(7, P_GOAL_POSITION_L, 825);
+	//wait_move_stop(7);exact_regulate(7, 0);
+	//delay_us(1000000);
+//	getchar();
+	
+	//回复7 servo的属性
+	set_servo_word(7, P_Punch, 50);//Punch
+	set_servo_byte(7, P_Slope, 128);//slop
+	set_servo_byte(7, P_CW_Slope, 128);
+	set_servo_word(7, P_TORQUE_VALUE, 258);//Torque
 	
 	//回到安全位置
 	set_three_servo_word(P_MOVE_SPEED, 60, 90, 120);
@@ -453,40 +494,59 @@ int analyze_packet(unsigned char packet[], int *status)
 	char numChar[3] = "3";
 	int num;
 
-	if('0' == packet[0])
-		return 0;
-	else if('1' == packet[0])
+	if('0' == packet[0]) //运动到槽道0 
+		return 0; 
+	else if('1' == packet[0]) //运动到槽道1
 		return 1;
-	else if('2' == packet[0])
+	else if('2' == packet[0]) //运动到槽道2
 		return 2;
-	else if('3' == packet[0])
+	else if('3' == packet[0]) //运动到槽道3
 		return 3;
-	else if('4' == packet[0])
+	else if('4' == packet[0]) //运动到槽道4
 		return 4;
-	else if('5' == packet[0])
+	else if('5' == packet[0]) //运动到槽道5
 		return 5;
-	else if('6' == packet[0])
+	else if('6' == packet[0]) //运动到槽道6
 		return 6;
-	else if('8' == packet[0])
+	else if('8' == packet[0]) //棋局开始：吸球准备
 		*status = 1;
-	else if(('7' == packet[0]) && ('8' == packet[5])) {
-		if(('0' <= packet[9])&& (packet[9] <= '6')) {
+	else if(('7' == packet[0]) && ('8' == packet[5])) { //在结束的同时，马上开始
+		if(('0' <= packet[9])&& (packet[9] <= '6')) {   //在结束的同时，马上开始，又同时接受槽道信息
 			*status = 2; //正在进心中
 			numChar[0] = (char)packet[9];
 			num = atoi(numChar);
 			return num;
 		}
-		else {
+		else { //在结束的同时，马上开始，但是没有受到槽道信息
 			*status = 3;
 			return -1;
 		}
 	}
-	else {
+	else { //回到初始位置
 		*status = 0;//回到初始位置
 		return 3;
 	}
 	
 	return 3;
+}
+
+//给主机发送数据
+void send_data(unsigned char *data)
+{
+	int datalen = sizeof(data);
+	int flag;
+	
+	//发送动作完成信号
+	while(1) {
+		flag = sendMessage(data, datalen);
+		if(flag != datalen){
+			printf("failed send data\r"); fflush(stdout);
+		}
+		else{
+			printf("success send data %s ...\n", data); fflush(stdout);
+			break;
+		}
+	}
 }
 
 
